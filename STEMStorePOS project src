@@ -27,7 +27,6 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.File;
-import java.awt.print.PrinterException;
 import java.awt.HeadlessException;
 
 class Product implements Serializable {
@@ -151,7 +150,7 @@ public class STEMStorePOS {
         }));
 
         frame = new JFrame("STEM STORE POS - Complete Inventory Management System");
-        frame.setSize(1300, 750);
+        frame.setSize(1300, 700);
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         frame.setLocationRelativeTo(null);
 
@@ -340,41 +339,61 @@ public class STEMStorePOS {
     }
 
     static JPanel startScreen(){
-        JPanel panel = new JPanel(new GridBagLayout());
+        JPanel panel = new JPanel(new BorderLayout());
         panel.setBackground(new Color(240, 248, 255));
+
+        // Center panel for main content
+        JPanel centerPanel = new JPanel(new GridBagLayout());
+        centerPanel.setBackground(new Color(240, 248, 255));
         GridBagConstraints gbc = new GridBagConstraints();
-        
+
         JLabel title = new JLabel("STEM STORE POS SYSTEM", SwingConstants.CENTER);
         title.setFont(new Font("Arial", Font.BOLD, 32));
         title.setForeground(new Color(0, 102, 204));
-        
+
         JLabel subtitle = new JLabel("Complete Inventory Management Solution", SwingConstants.CENTER);
         subtitle.setFont(new Font("Arial", Font.PLAIN, 16));
         subtitle.setForeground(new Color(100, 100, 100));
-        
+
         JButton admin = new JButton("LOGIN AS ADMIN");
         JButton cashier = new JButton("LOGIN AS CASHIER");
-        
         styleButton(admin, new Color(0, 102, 204));
         styleButton(cashier, new Color(46, 139, 87));
-        
         admin.setPreferredSize(new Dimension(250, 45));
         cashier.setPreferredSize(new Dimension(250, 45));
-        
+
         gbc.gridx = 0;
         gbc.gridy = 0;
         gbc.insets = new Insets(20, 20, 10, 20);
-        panel.add(title, gbc);
-        
+        centerPanel.add(title, gbc);
+
         gbc.gridy = 1;
-        panel.add(subtitle, gbc);
-        
+        centerPanel.add(subtitle, gbc);
+
         gbc.gridy = 2;
         gbc.insets = new Insets(30, 20, 20, 20);
-        panel.add(admin, gbc);
-        
+        centerPanel.add(admin, gbc);
+
         gbc.gridy = 3;
-        panel.add(cashier, gbc);
+        gbc.insets = new Insets(10, 20, 20, 20);
+        centerPanel.add(cashier, gbc);
+
+        // Bottom panel for group info (right-aligned)
+        JPanel bottomPanel = new JPanel(new BorderLayout());
+        bottomPanel.setBackground(new Color(240, 248, 255));
+        bottomPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 20));
+
+        // Group info as HTML
+        JLabel groupInfo = new JLabel("<html><b>Group 1</b><br>1. Tamerat Mekonnen<br>2. Mekdelawit Zelalem<br>3. Selam Mekonnen<br>4. Elgrace</html>");
+        groupInfo.setFont(new Font("Arial", Font.PLAIN, 11));
+        groupInfo.setForeground(new Color(100, 100, 100));
+        groupInfo.setHorizontalAlignment(SwingConstants.RIGHT);
+
+        bottomPanel.add(groupInfo, BorderLayout.EAST);
+
+        // Add all panels
+        panel.add(centerPanel, BorderLayout.CENTER);
+        panel.add(bottomPanel, BorderLayout.SOUTH);
 
         admin.addActionListener(e->layout.show(mainPanel,"adminLogin"));
         cashier.addActionListener(e->layout.show(mainPanel,"cashierLogin"));
