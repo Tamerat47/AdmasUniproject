@@ -110,6 +110,22 @@ class User implements Serializable {
         lastLoginDate = "";
     }
 }
+class Session implements Serializable {
+    private static final long serialVersionUID = 1L;
+    String username;
+    String role;
+    String loginDateTime;
+    String logoutDateTime;
+    String duration;
+    
+    Session(String username, String role, String loginDateTime) {
+        this.username = username;
+        this.role = role;
+        this.loginDateTime = loginDateTime;
+        this.logoutDateTime = "";
+        this.duration = "";
+    }
+}
 
 public class STEMStorePOS {
 
@@ -128,6 +144,8 @@ public class STEMStorePOS {
     static JTable inventoryTable;
     static DefaultTableModel inventoryModel;
     static int currentReceiptNo = 1000;
+    static ArrayList<Session> sessionHistory = new ArrayList<>();
+    static final String SESSIONS_FILE = "sessions.dat";
     
     static final String SALES_FILE = "sales_history.dat";
     static final String INVENTORY_FILE = "inventory.dat";
@@ -139,11 +157,8 @@ public class STEMStorePOS {
         loadUsers();
         loadSalesHistory();
         loadReceiptCounter();
-        
-        users.add(new User("admin","1234","admin"));
-        users.add(new User("teller1","1111","cashier"));
-        users.add(new User("teller2","2222","cashier"));
-        
+        loadSessions(); 
+           
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             System.out.println("Shutdown hook: Saving all data...");
             saveAllData();
@@ -192,6 +207,7 @@ public class STEMStorePOS {
         saveInventory();
         saveUsers();
         saveReceiptCounter();
+        saveSessions();
     }
     
     // Save sales history to file
@@ -216,6 +232,30 @@ public class STEMStorePOS {
             }
         } else {
             salesHistory = new ArrayList<>();
+        }
+    }
+    // Save sessions to file
+    static void saveSessions() {
+        try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(SESSIONS_FILE))) {
+            oos.writeObject(sessionHistory);
+        } catch (IOException e) {
+            System.err.println("Error saving sessions: " + e.getMessage());
+        }
+    }
+
+    // Load sessions from file
+    @SuppressWarnings("unchecked")
+    static void loadSessions() {
+        File file = new File(SESSIONS_FILE);
+        if (file.exists()) {
+            try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(file))) {
+                sessionHistory = (ArrayList<Session>) ois.readObject();
+            } catch (IOException | ClassNotFoundException e) {
+                System.err.println("Error loading sessions: " + e.getMessage());
+                sessionHistory = new ArrayList<>();
+            }
+        } else {
+            sessionHistory = new ArrayList<>();
         }
     }
     
@@ -280,6 +320,7 @@ public class STEMStorePOS {
                     if(u.logoutTime == null) u.logoutTime = "";
                     if(u.lastLoginDate == null) u.lastLoginDate = "";
                 }
+                System.out.println("Users loaded from file. Count: " + users.size());
             } catch (IOException | ClassNotFoundException e) {
                 System.err.println("Error loading users: " + e.getMessage());
                 loadDefaultUsers();
@@ -288,7 +329,6 @@ public class STEMStorePOS {
             loadDefaultUsers();
         }
     }
-    
     // Save receipt counter
     static void saveReceiptCounter() {
         try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(RECEIPT_COUNTER_FILE))) {
@@ -315,27 +355,31 @@ public class STEMStorePOS {
     
     // Load default users
     static void loadDefaultUsers() {
-        users.clear();
-        User admin = new User("admin","1234","admin");
-        admin.isLoggedIn = false;
-        admin.loginTime = "";
-        admin.logoutTime = "";
-        admin.lastLoginDate = "";
-        users.add(admin);
-        
-        User teller1 = new User("teller1","1111","cashier");
-        teller1.isLoggedIn = false;
-        teller1.loginTime = "";
-        teller1.logoutTime = "";
-        teller1.lastLoginDate = "";
-        users.add(teller1);
-        
-        User teller2 = new User("teller2","2222","cashier");
-        teller2.isLoggedIn = false;
-        teller2.loginTime = "";
-        teller2.logoutTime = "";
-        teller2.lastLoginDate = "";
-        users.add(teller2);
+        if (users.isEmpty()) {
+            users.clear();
+            User admin = new User("admin","1234","admin");
+            admin.isLoggedIn = false;
+            admin.loginTime = "";
+            admin.logoutTime = "";
+            admin.lastLoginDate = "";
+            users.add(admin);
+
+            User teller1 = new User("teller1","1111","cashier");
+            teller1.isLoggedIn = false;
+            teller1.loginTime = "";
+            teller1.logoutTime = "";
+            teller1.lastLoginDate = "";
+            users.add(teller1);
+
+            User teller2 = new User("teller2","2222","cashier");
+            teller2.isLoggedIn = false;
+            teller2.loginTime = "";
+            teller2.logoutTime = "";
+            teller2.lastLoginDate = "";
+            users.add(teller2);
+
+            System.out.println("Default users loaded");
+        }
     }
 
     static JPanel startScreen(){
@@ -462,24 +506,53 @@ public class STEMStorePOS {
         buttonPanel.add(back);
         panel.add(buttonPanel, gbc);
 
-        login.addActionListener(e->{
+       login.addActionListener(e->{
             boolean loggedIn = false;
             for(User u: users){
-                 if(u.username.equals(user.getText()) && u.password.equals(new String(pass.getPassword())) && u.role.equals(role)){
+                if(u.username.equals(user.getText()) && u.password.equals(new String(pass.getPassword())) && u.role.equals(role)){
                     loggedIn = true;
-                    
-                    // Track login information
+
+                    // CRITICAL FIX: Check if user was already logged in (from previous session)
+                    // If yes, close that session first
+                    for(int i = sessionHistory.size() - 1; i >= 0; i--) {
+                        Session s = sessionHistory.get(i);
+                        if(s.username.equals(u.username) && s.logoutDateTime.isEmpty()) {
+                            // Close the previous session
+                            Date now = new Date();
+                            String currentDateTime = new SimpleDateFormat("dd/MM/yyyy HH:mm:ss").format(now);
+                            s.logoutDateTime = currentDateTime;
+                            // Calculate duration
+                            try {
+                                SimpleDateFormat format = new SimpleDateFormat("dd/MM/yyyy HH:mm:ss");
+                                Date loginDate = format.parse(s.loginDateTime);
+                                Date logoutDate = format.parse(currentDateTime);
+                                long diffMillis = logoutDate.getTime() - loginDate.getTime();
+                                long hours = diffMillis / (60 * 60 * 1000);
+                                long minutes = (diffMillis % (60 * 60 * 1000)) / (60 * 1000);
+                                s.duration = String.format("%dh %dm", hours, minutes);
+                            } catch(Exception ex) {
+                                s.duration = "---";
+                            }
+                            break;
+                        }
+                    }
+
+                    // Track new login information
                     u.isLoggedIn = true;
-                    // Ensure fields are initialized
-                    if(u.loginTime == null) u.loginTime = "";
-                    if(u.logoutTime == null) u.logoutTime = "";
-                    if(u.lastLoginDate == null) u.lastLoginDate = "";
-                    
-                    u.loginTime = new SimpleDateFormat("HH:mm:ss").format(new Date());
-                    u.lastLoginDate = new SimpleDateFormat("dd/MM/yyyy HH:mm:ss").format(new Date());
-                    u.logoutTime = ""; // Clear previous logout time
+
+                    Date now = new Date();
+                    String currentDateTime = new SimpleDateFormat("dd/MM/yyyy HH:mm:ss").format(now);
+
+                    u.loginTime = new SimpleDateFormat("HH:mm:ss").format(now);
+                    u.lastLoginDate = currentDateTime;
+                    u.logoutTime = "";
                     saveUsers();
-                    
+
+                    // Create new session record for this login
+                    Session newSession = new Session(u.username, u.role, currentDateTime);
+                    sessionHistory.add(newSession);
+                    saveSessions();
+
                     if(role.equals("admin")) {
                         layout.show(mainPanel,"admin");
                     } else {
@@ -558,17 +631,43 @@ public class STEMStorePOS {
         usersBtn.addActionListener(e->adminLayout.show(content,"users"));
         reportsBtn.addActionListener(e->adminLayout.show(content,"reports"));
         
-        logout.addActionListener(e->{
+       logout.addActionListener(e->{
             // Record logout time for admin
+            Date now = new Date();
+            String currentDateTime = new SimpleDateFormat("dd/MM/yyyy HH:mm:ss").format(now);
+            String currentTime = new SimpleDateFormat("HH:mm:ss").format(now);
+
             for(User u : users) {
                 if(u.username.equals("admin")) {
                     u.isLoggedIn = false;
-                    if(u.logoutTime == null) u.logoutTime = "";
-                    u.logoutTime = new SimpleDateFormat("HH:mm:ss").format(new Date());
+                    u.logoutTime = currentTime;
                     saveUsers();
                     break;
                 }
             }
+
+            // Update the latest session for admin
+            for(int i = sessionHistory.size() - 1; i >= 0; i--) {
+                Session s = sessionHistory.get(i);
+                if(s.username.equals("admin") && s.logoutDateTime.isEmpty()) {
+                    s.logoutDateTime = currentDateTime;
+                    // Calculate duration
+                    try {
+                        SimpleDateFormat format = new SimpleDateFormat("dd/MM/yyyy HH:mm:ss");
+                        Date loginDate = format.parse(s.loginDateTime);
+                        Date logoutDate = format.parse(currentDateTime);
+                        long diffMillis = logoutDate.getTime() - loginDate.getTime();
+                        long hours = diffMillis / (60 * 60 * 1000);
+                        long minutes = (diffMillis % (60 * 60 * 1000)) / (60 * 1000);
+                        s.duration = String.format("%dh %dm", hours, minutes);
+                    } catch(Exception ex) {
+                        s.duration = "---";
+                    }
+                    break;
+                }
+            }
+            saveSessions();
+
             currentCashier = "";
             layout.show(mainPanel,"start");
         });
@@ -1347,7 +1446,7 @@ public class STEMStorePOS {
         generateReport.addActionListener(e -> {
             StringBuilder report = new StringBuilder();
             report.append("╔══════════════════════════════════════════════════════════╗\n");
-            report.append("║                    SALES REPORT                          ║\n");
+            report.append("║                    SALES REPORT                  ║\n");
             report.append("╚══════════════════════════════════════════════════════════╝\n\n");
             report.append("Generated: ").append(new SimpleDateFormat("dd/MM/yyyy HH:mm:ss").format(new Date())).append("\n\n");
             
@@ -1420,37 +1519,113 @@ public class STEMStorePOS {
         
         return panel;
         }
-    
+    //User management panel in the admin manage user
     static JPanel userManagementPanel(){
         JPanel panel = new JPanel(new BorderLayout());
-        panel.setBorder(BorderFactory.createTitledBorder("User Management"));
-        
-        // Create table with login information columns
-        DefaultTableModel userModel = new DefaultTableModel(new String[]{
-            "Username", "Role", "Status", "Login Time", "Logout Time", "Last Login Date"
+        panel.setBorder(BorderFactory.createTitledBorder("User Session Records"));
+
+        // ============ SESSION RECORDS TABLE ============
+        JPanel tablePanel = new JPanel(new BorderLayout());
+        tablePanel.setBorder(BorderFactory.createTitledBorder("Monthly Login/Logout Records"));
+
+        // Table for session records
+        DefaultTableModel sessionModel = new DefaultTableModel(new String[]{
+            "Username", "Role", "Login Date & Time", "Logout Date & Time", "Duration"
         }, 0);
-        JTable userTable = new JTable(userModel);
-        userTable.setFont(new Font("Arial", Font.PLAIN, 12));
-        userTable.getTableHeader().setFont(new Font("Arial", Font.BOLD, 12));
-        userTable.setRowHeight(25);
-        
-        refreshUserTableWithLoginInfo(userModel);
-        
-        JScrollPane scrollPane = new JScrollPane(userTable);
-        panel.add(scrollPane, BorderLayout.CENTER);
-        
-        // Add/Delete Users Panel at bottom
-        JPanel bottomPanel = new JPanel(new GridBagLayout());
-        bottomPanel.setBorder(BorderFactory.createTitledBorder("Manage Users"));
+
+        JTable sessionTable = new JTable(sessionModel);
+        sessionTable.setFont(new Font("Arial", Font.PLAIN, 12));
+        sessionTable.getTableHeader().setFont(new Font("Arial", Font.BOLD, 12));
+        sessionTable.setRowHeight(25);
+
+        JScrollPane tableScroll = new JScrollPane(sessionTable);
+        tablePanel.add(tableScroll, BorderLayout.CENTER);
+
+        // Filter panel
+        JPanel filterPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        filterPanel.setBorder(BorderFactory.createTitledBorder("Filter by Month"));
+        filterPanel.setBackground(new Color(240, 248, 255));
+
+        JComboBox<String> monthCombo = new JComboBox<>();
+        SimpleDateFormat monthFormat = new SimpleDateFormat("MMMM yyyy");
+        Calendar cal = Calendar.getInstance();
+        // Add current month and last 11 months for better history
+        for (int i = 0; i < 12; i++) {
+            monthCombo.addItem(monthFormat.format(cal.getTime()));
+            cal.add(Calendar.MONTH, -1);
+        }
+
+        JButton loadRecordsBtn = new JButton("Load Records");
+        JButton refreshBtn = new JButton("Refresh");
+        JButton exportBtn = new JButton("Export to CSV");
+
+        styleButton(loadRecordsBtn, new Color(52, 152, 219));
+        styleButton(refreshBtn, new Color(52, 152, 219));
+        styleButton(exportBtn, new Color(46, 139, 87));
+
+        filterPanel.add(new JLabel("Select Month:"));
+        filterPanel.add(monthCombo);
+        filterPanel.add(loadRecordsBtn);
+        filterPanel.add(refreshBtn);
+        filterPanel.add(exportBtn);
+
+        tablePanel.add(filterPanel, BorderLayout.NORTH);
+
+        // User management controls on the right
+        // ============ USER MANAGEMENT CONTROLS (RIGHT SIDE) ============
+        JPanel controlPanel = new JPanel();
+        controlPanel.setBorder(BorderFactory.createTitledBorder("Manage Users"));
+        controlPanel.setLayout(new BoxLayout(controlPanel, BoxLayout.Y_AXIS));
+        controlPanel.setPreferredSize(new Dimension(320, 0));
+        controlPanel.setBackground(new Color(245, 245, 245));
+
+        // Add User Section
+        JPanel addUserSection = new JPanel(new GridBagLayout());
+        addUserSection.setBorder(BorderFactory.createTitledBorder("Add New User"));
+        addUserSection.setBackground(new Color(245, 245, 245));
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(5, 5, 5, 5);
-        
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+
         JTextField newUsername = new JTextField(15);
         JPasswordField newPassword = new JPasswordField(15);
         JComboBox<String> roleBox = new JComboBox<>(new String[]{"cashier", "admin"});
         JButton addUserBtn = new JButton("Add User");
         styleButton(addUserBtn, new Color(46, 139, 87));
-        
+
+        int row = 0;
+        gbc.gridx = 0; gbc.gridy = row; gbc.anchor = GridBagConstraints.EAST;
+        addUserSection.add(new JLabel("Username:"), gbc);
+        gbc.gridx = 1; gbc.anchor = GridBagConstraints.WEST;
+        addUserSection.add(newUsername, gbc);
+
+        row++;
+        gbc.gridx = 0; gbc.gridy = row;
+        addUserSection.add(new JLabel("Password:"), gbc);
+        gbc.gridx = 1;
+        addUserSection.add(newPassword, gbc);
+
+        row++;
+        gbc.gridx = 0; gbc.gridy = row;
+        addUserSection.add(new JLabel("Role:"), gbc);
+        gbc.gridx = 1;
+        addUserSection.add(roleBox, gbc);
+
+        row++;
+        gbc.gridx = 1; gbc.gridy = row;
+        addUserSection.add(addUserBtn, gbc);
+
+        controlPanel.add(addUserSection);
+        controlPanel.add(Box.createRigidArea(new Dimension(0, 10)));
+
+        // Delete User Section
+        JPanel deleteUserSection = new JPanel(new GridBagLayout());
+        deleteUserSection.setBorder(BorderFactory.createTitledBorder("Delete User"));
+        deleteUserSection.setBackground(new Color(245, 245, 245));
+        gbc = new GridBagConstraints();
+        gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+
         JComboBox<String> userToDelete = new JComboBox<>();
         for(User u : users) {
             if(!u.username.equals("admin")) {
@@ -1459,121 +1634,433 @@ public class STEMStorePOS {
         }
         JButton deleteUserBtn = new JButton("Delete User");
         styleButton(deleteUserBtn, new Color(220, 53, 69));
-        
-        JButton refreshBtn = new JButton("Refresh");
-        styleButton(refreshBtn, new Color(52, 152, 219));
-        
-        gbc.gridx = 0; gbc.gridy = 0;
-        bottomPanel.add(new JLabel("New Username:"), gbc);
-        gbc.gridx = 1;
-        bottomPanel.add(newUsername, gbc);
-        
-        gbc.gridx = 0; gbc.gridy = 1;
-        bottomPanel.add(new JLabel("Password:"), gbc);
-        gbc.gridx = 1;
-        bottomPanel.add(newPassword, gbc);
-        
-        gbc.gridx = 0; gbc.gridy = 2;
-        bottomPanel.add(new JLabel("Role:"), gbc);
-        gbc.gridx = 1;
-        bottomPanel.add(roleBox, gbc);
-        
-        gbc.gridx = 1; gbc.gridy = 3;
-        bottomPanel.add(addUserBtn, gbc);
-        
-        gbc.gridx = 0; gbc.gridy = 4;
-        bottomPanel.add(new JLabel("Delete User:"), gbc);
-        gbc.gridx = 1;
-        bottomPanel.add(userToDelete, gbc);
-        
-        gbc.gridx = 0; gbc.gridy = 5;
-        bottomPanel.add(refreshBtn, gbc);
-        gbc.gridx = 1;
-        bottomPanel.add(deleteUserBtn, gbc);
-        
-        panel.add(bottomPanel, BorderLayout.SOUTH);
-        
-        // Add User Action
-        addUserBtn.addActionListener(e->{
-            String username = newUsername.getText().trim();
-            String password = new String(newPassword.getPassword());
-            String role = (String)roleBox.getSelectedItem();
-            
-            if(username.isEmpty() || password.isEmpty()) {
-                JOptionPane.showMessageDialog(panel, "Username and password cannot be empty!", "Error", JOptionPane.ERROR_MESSAGE);
-                return;
+
+        gbc.gridx = 0; gbc.gridy = 0; gbc.anchor = GridBagConstraints.EAST;
+        deleteUserSection.add(new JLabel("Select User:"), gbc);
+        gbc.gridx = 1; gbc.anchor = GridBagConstraints.WEST;
+        deleteUserSection.add(userToDelete, gbc);
+
+        gbc.gridx = 1; gbc.gridy = 1;
+        deleteUserSection.add(deleteUserBtn, gbc);
+
+        controlPanel.add(deleteUserSection);
+        controlPanel.add(Box.createRigidArea(new Dimension(0, 10)));
+
+        // Reset Password Section
+        JPanel resetPassSection = new JPanel(new GridBagLayout());
+        resetPassSection.setBorder(BorderFactory.createTitledBorder("Reset Password"));
+        resetPassSection.setBackground(new Color(245, 245, 245));
+        gbc = new GridBagConstraints();
+        gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+
+        JComboBox<String> userToReset = new JComboBox<>();
+        Set<String> uniqueUsers = new HashSet<>();
+        for(User u : users) {
+            uniqueUsers.add(u.username);
+        }
+        for(String username : uniqueUsers) {
+            userToReset.addItem(username);
+        }
+
+        JButton resetPasswordBtn = new JButton("Reset Password");
+        styleButton(resetPasswordBtn, new Color(255, 140, 0));
+
+        gbc.gridx = 0; gbc.gridy = 0; gbc.anchor = GridBagConstraints.EAST;
+        resetPassSection.add(new JLabel("Select User:"), gbc);
+        gbc.gridx = 1; gbc.anchor = GridBagConstraints.WEST;
+        resetPassSection.add(userToReset, gbc);
+
+        gbc.gridx = 1; gbc.gridy = 1;
+        resetPassSection.add(resetPasswordBtn, gbc);
+
+        controlPanel.add(resetPassSection);
+        controlPanel.add(Box.createRigidArea(new Dimension(0, 10)));
+
+        // Force Logout Section - ADD THIS SECTION HERE
+        JPanel forceLogoutSection = new JPanel(new GridBagLayout());
+        forceLogoutSection.setBorder(BorderFactory.createTitledBorder("Force Logout"));
+        forceLogoutSection.setBackground(new Color(245, 245, 245));
+        gbc = new GridBagConstraints();
+        gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+
+        JComboBox<String> userToForceLogout = new JComboBox<>();
+        // Add only users who are currently logged in
+        for(User u : users) {
+            if(u.isLoggedIn) {
+                userToForceLogout.addItem(u.username);
             }
-            
-            for(User u : users) {
-                if(u.username.equals(username)) {
-                    JOptionPane.showMessageDialog(panel, "Username already exists!", "Error", JOptionPane.ERROR_MESSAGE);
-                    return;
-                }
-            }
-            
-            User newUser = new User(username, password, role);
-            newUser.isLoggedIn = false;
-            newUser.loginTime = "";
-            newUser.logoutTime = "";
-            newUser.lastLoginDate = "";
-            users.add(newUser);
-            saveUsers();
-            refreshUserTableWithLoginInfo(userModel);
-            userToDelete.addItem(username);
-            newUsername.setText("");
-            newPassword.setText("");
-            JOptionPane.showMessageDialog(panel, "User added successfully!");
-        });
-        
-        // Delete User Action
-        deleteUserBtn.addActionListener(e->{
-            String selectedUser = (String)userToDelete.getSelectedItem();
-            if(selectedUser != null) {
-                int confirm = JOptionPane.showConfirmDialog(panel, "Are you sure you want to delete user: " + selectedUser + "?", 
-                                                           "Confirm Delete", JOptionPane.YES_NO_OPTION);
-                if(confirm == JOptionPane.YES_OPTION) {
-                    users.removeIf(u -> u.username.equals(selectedUser));
-                    saveUsers();
-                    refreshUserTableWithLoginInfo(userModel);
-                    userToDelete.removeAllItems();
-                    for(User u : users) {
-                        if(!u.username.equals("admin")) {
-                            userToDelete.addItem(u.username);
+        }
+        JButton forceLogoutBtn = new JButton("Force Logout");
+        styleButton(forceLogoutBtn, new Color(220, 53, 69));
+
+        gbc.gridx = 0; gbc.gridy = 0; gbc.anchor = GridBagConstraints.EAST;
+        forceLogoutSection.add(new JLabel("Select User:"), gbc);
+        gbc.gridx = 1; gbc.anchor = GridBagConstraints.WEST;
+        forceLogoutSection.add(userToForceLogout, gbc);
+
+        gbc.gridx = 1; gbc.gridy = 1;
+        forceLogoutSection.add(forceLogoutBtn, gbc);
+
+        controlPanel.add(forceLogoutSection);
+        controlPanel.add(Box.createRigidArea(new Dimension(0, 10)));
+
+        // Add vertical glue to push everything to the top
+        controlPanel.add(Box.createVerticalGlue());
+
+        // Create main panel with split pane and control panel
+        JPanel mainPanel = new JPanel(new BorderLayout());
+        mainPanel.add(tablePanel, BorderLayout.CENTER);
+        mainPanel.add(controlPanel, BorderLayout.EAST);
+
+        panel.add(mainPanel, BorderLayout.CENTER);
+
+        // Method to load sessions for selected month
+        // In the userManagementPanel(), update the SessionLoader class:
+        class SessionLoader {
+            void load(DefaultTableModel model, String monthYear) {
+                model.setRowCount(0);
+
+                if (monthYear == null || monthYear.isEmpty()) return;
+
+                try {
+                    SimpleDateFormat monthParser = new SimpleDateFormat("MMMM yyyy");
+                    Date monthDate = monthParser.parse(monthYear);
+                    Calendar calTarget = Calendar.getInstance();
+                    calTarget.setTime(monthDate);
+                    int targetMonth = calTarget.get(Calendar.MONTH);
+                    int targetYear = calTarget.get(Calendar.YEAR);
+
+                    SimpleDateFormat dateTimeFormat = new SimpleDateFormat("dd/MM/yyyy HH:mm:ss");
+
+                    boolean hasRecords = false;
+
+                    // Sort sessions by login time (newest first)
+                    ArrayList<Session> sortedSessions = new ArrayList<>(sessionHistory);
+                    sortedSessions.sort((s1, s2) -> s2.loginDateTime.compareTo(s1.loginDateTime));
+
+                    for (Session s : sortedSessions) {
+                        try {
+                            Date loginDateTime = dateTimeFormat.parse(s.loginDateTime);
+                            Calendar loginCal = Calendar.getInstance();
+                            loginCal.setTime(loginDateTime);
+
+                            if (loginCal.get(Calendar.MONTH) == targetMonth && loginCal.get(Calendar.YEAR) == targetYear) {
+                                hasRecords = true;
+                                String logoutDisplay = s.logoutDateTime.isEmpty() ? "🔴 Still Logged In" : s.logoutDateTime;
+                                String durationDisplay = s.duration.isEmpty() ? "---" : s.duration;
+
+                                // Color code the status
+                                if (s.logoutDateTime.isEmpty()) {
+                                    model.addRow(new Object[]{
+                                        s.username, s.role, s.loginDateTime, logoutDisplay, durationDisplay
+                                    });
+                                } else {
+                                    model.addRow(new Object[]{
+                                        s.username, s.role, s.loginDateTime, logoutDisplay, durationDisplay
+                                    });
+                                }
+                            }
+                        } catch (Exception ex) {
+                            continue;
                         }
                     }
-                    JOptionPane.showMessageDialog(panel, "User deleted successfully!");
+
+                    if (!hasRecords) {
+                        model.addRow(new Object[]{"No records for " + monthYear, "", "", "", ""});
+                    }
+                } catch (Exception e) {
+                    model.addRow(new Object[]{"Error loading records", "", "", "", ""});
+                }
+            }
+            
+        }
+
+
+        SessionLoader sessionLoader = new SessionLoader();
+                // Create a timer that auto-refreshes every 3 seconds
+        javax.swing.Timer refreshTimer = new javax.swing.Timer(3000, new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                // Only refresh if this panel is visible
+                if (panel.isShowing()) {
+                    String currentMonth = (String) monthCombo.getSelectedItem();
+                    if (currentMonth != null) {
+                        sessionLoader.load(sessionModel, currentMonth);
+                    }
+
+                    // Update force logout dropdown to show who's currently logged in
+                    userToForceLogout.removeAllItems();
+                    for(User u : users) {
+                        if(u.isLoggedIn) {
+                            userToForceLogout.addItem(u.username);
+                        }
+                    }
                 }
             }
         });
-        
-        // Refresh Action
-        refreshBtn.addActionListener(e -> refreshUserTableWithLoginInfo(userModel));
-        
+        refreshTimer.start();
+            panel.addComponentListener(new ComponentAdapter() {
+            @Override
+            public void componentShown(ComponentEvent e) {
+                String currentMonth = (String) monthCombo.getSelectedItem();
+                if (currentMonth != null) {
+                    sessionLoader.load(sessionModel, currentMonth);
+                }
+
+                // Update force logout dropdown
+                userToForceLogout.removeAllItems();
+                for(User u : users) {
+                    if(u.isLoggedIn) {
+                        userToForceLogout.addItem(u.username);
+                    }
+                }
+            }
+        });
+
+        // Load records button
+        loadRecordsBtn.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                String selectedMonth = (String) monthCombo.getSelectedItem();
+                if (selectedMonth != null) {
+                    sessionLoader.load(sessionModel, selectedMonth);
+                }
+            }
+        });
+
+        // Refresh button - reload current month
+        refreshBtn.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                String currentMonth = monthFormat.format(new Date());
+                monthCombo.setSelectedItem(currentMonth);
+                sessionLoader.load(sessionModel, currentMonth);
+
+                // Refresh all dropdowns
+                userToDelete.removeAllItems();
+                userToReset.removeAllItems();
+                userToForceLogout.removeAllItems();
+
+                for(User u : users) {
+                    if(!u.username.equals("admin")) {
+                        userToDelete.addItem(u.username);
+                    }
+                    userToReset.addItem(u.username);
+                    if(u.isLoggedIn) {
+                        userToForceLogout.addItem(u.username);
+                    }
+                }
+
+                JOptionPane.showMessageDialog(panel, "Data refreshed successfully!", 
+                    "Refresh Complete", JOptionPane.INFORMATION_MESSAGE);
+            }
+        });
+
+        // Export button
+        exportBtn.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                if (sessionModel.getRowCount() == 0 || 
+                    (sessionModel.getRowCount() == 1 && sessionModel.getValueAt(0, 0).toString().startsWith("No records"))) {
+                    JOptionPane.showMessageDialog(panel, "No records to export!", "Error", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+
+                JFileChooser fileChooser = new JFileChooser();
+                String filename = "session_records_" + new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date()) + ".csv";
+                fileChooser.setSelectedFile(new File(filename));
+
+                if (fileChooser.showSaveDialog(null) == JFileChooser.APPROVE_OPTION) {
+                    try (PrintWriter writer = new PrintWriter(fileChooser.getSelectedFile())) {
+                        for (int i = 0; i < sessionModel.getColumnCount(); i++) {
+                            writer.print(sessionModel.getColumnName(i));
+                            if (i < sessionModel.getColumnCount() - 1) writer.print(",");
+                        }
+                        writer.println();
+
+                        for (int row = 0; row < sessionModel.getRowCount(); row++) {
+                            for (int col = 0; col < sessionModel.getColumnCount(); col++) {
+                                Object value = sessionModel.getValueAt(row, col);
+                                writer.print(value != null ? value.toString() : "");
+                                if (col < sessionModel.getColumnCount() - 1) writer.print(",");
+                            }
+                            writer.println();
+                        }
+
+                        JOptionPane.showMessageDialog(panel, "Records exported successfully!", 
+                            "Export Complete", JOptionPane.INFORMATION_MESSAGE);
+                    } catch (IOException ex) {
+                        JOptionPane.showMessageDialog(panel, "Error exporting: " + ex.getMessage(), 
+                            "Error", JOptionPane.ERROR_MESSAGE);
+                    }
+                }
+            }
+        });
+
+        // Add User Action
+        addUserBtn.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                String username = newUsername.getText().trim();
+                String password = new String(newPassword.getPassword());
+                String role = (String) roleBox.getSelectedItem();
+
+                if (username.isEmpty() || password.isEmpty()) {
+                    JOptionPane.showMessageDialog(panel, "Username and password cannot be empty!", 
+                        "Error", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+
+                for (User u : users) {
+                    if (u.username.equals(username)) {
+                        JOptionPane.showMessageDialog(panel, "Username already exists!", 
+                            "Error", JOptionPane.ERROR_MESSAGE);
+                        return;
+                    }
+                }
+
+                User newUser = new User(username, password, role);
+                newUser.isLoggedIn = false;
+                newUser.loginTime = "";
+                newUser.logoutTime = "";
+                newUser.lastLoginDate = "";
+                users.add(newUser);
+                saveUsers();
+
+                userToDelete.addItem(username);
+                userToReset.addItem(username);
+
+                newUsername.setText("");
+                newPassword.setText("");
+                JOptionPane.showMessageDialog(panel, "User added successfully!");
+            }
+        });
+
+        // Delete User Action
+        deleteUserBtn.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                String selectedUser = (String) userToDelete.getSelectedItem();
+                if (selectedUser != null) {
+                    int confirm = JOptionPane.showConfirmDialog(panel, 
+                        "Are you sure you want to delete user: " + selectedUser + "?", 
+                        "Confirm Delete", JOptionPane.YES_NO_OPTION);
+                    if (confirm == JOptionPane.YES_OPTION) {
+                        users.removeIf(u -> u.username.equals(selectedUser));
+                        saveUsers();
+
+                        userToDelete.removeAllItems();
+                        userToReset.removeAllItems();
+                        for (User u : users) {
+                            if (!u.username.equals("admin")) {
+                                userToDelete.addItem(u.username);
+                            }
+                            userToReset.addItem(u.username);
+                        }
+
+                        JOptionPane.showMessageDialog(panel, "User deleted successfully!");
+                    }
+                }
+            }
+        });
+
+        // Reset Password Action
+        resetPasswordBtn.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                String selectedUser = (String) userToReset.getSelectedItem();
+                if (selectedUser != null) {
+                    String newPasswordValue = JOptionPane.showInputDialog(panel, 
+                        "Enter new password for user: " + selectedUser, 
+                        "Reset Password", JOptionPane.QUESTION_MESSAGE);
+                    if (newPasswordValue != null && !newPasswordValue.trim().isEmpty()) {
+                        for (User u : users) {
+                            if (u.username.equals(selectedUser)) {
+                                u.password = newPasswordValue;
+                                saveUsers();
+                                JOptionPane.showMessageDialog(panel, 
+                                    "Password reset successfully for: " + selectedUser, 
+                                    "Success", JOptionPane.INFORMATION_MESSAGE);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        // Force Logout Action - ADD THIS AFTER Reset Password Action
+        forceLogoutBtn.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                String selectedUser = (String) userToForceLogout.getSelectedItem();
+                if (selectedUser != null) {
+                    int confirm = JOptionPane.showConfirmDialog(panel, 
+                        "Force logout user: " + selectedUser + "?\nThis will close their current session.", 
+                        "Confirm Force Logout", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+                    if (confirm == JOptionPane.YES_OPTION) {
+                        Date now = new Date();
+                        String currentDateTime = new SimpleDateFormat("dd/MM/yyyy HH:mm:ss").format(now);
+                        String currentTime = new SimpleDateFormat("HH:mm:ss").format(now);
+
+                        // Update user status
+                        for(User u : users) {
+                            if(u.username.equals(selectedUser)) {
+                                u.isLoggedIn = false;
+                                u.logoutTime = currentTime;
+                                saveUsers();
+                                break;
+                            }
+                        }
+
+                        // Update the latest session for this user
+                        for(int i = sessionHistory.size() - 1; i >= 0; i--) {
+                            Session s = sessionHistory.get(i);
+                            if(s.username.equals(selectedUser) && s.logoutDateTime.isEmpty()) {
+                                s.logoutDateTime = currentDateTime;
+                                try {
+                                    SimpleDateFormat format = new SimpleDateFormat("dd/MM/yyyy HH:mm:ss");
+                                    Date loginDate = format.parse(s.loginDateTime);
+                                    Date logoutDate = format.parse(currentDateTime);
+                                    long diffMillis = logoutDate.getTime() - loginDate.getTime();
+                                    long hours = diffMillis / (60 * 60 * 1000);
+                                    long minutes = (diffMillis % (60 * 60 * 1000)) / (60 * 1000);
+                                    s.duration = String.format("%dh %dm", hours, minutes);
+                                } catch(Exception ex) {
+                                    s.duration = "---";
+                                }
+                                break;
+                            }
+                        }
+                        saveSessions();
+
+                        // Refresh the force logout dropdown
+                        userToForceLogout.removeAllItems();
+                        for(User u : users) {
+                            if(u.isLoggedIn) {
+                                userToForceLogout.addItem(u.username);
+                            }
+                        }
+
+                        // Refresh the session table
+                        String currentMonth = monthFormat.format(new Date());
+                        sessionLoader.load(sessionModel, currentMonth);
+
+                        JOptionPane.showMessageDialog(panel, "User " + selectedUser + " has been force logged out!", 
+                            "Force Logout Complete", JOptionPane.INFORMATION_MESSAGE);
+                    }
+                }
+            }
+        });
+
+        // Initial load - show current month
+        sessionLoader.load(sessionModel, monthFormat.format(new Date()));
+
         return panel;
     }
-    
-        // Helper method to refresh user table with login information
-    static void refreshUserTableWithLoginInfo(DefaultTableModel model) {
-        model.setRowCount(0);
-        for(User u : users) {
-            String status = u.isLoggedIn ? "● Logged In" : "○ Logged Out";
-            
-            // Add null checks for all string fields
-            String loginTime = (u.loginTime != null && !u.loginTime.isEmpty()) ? u.loginTime : "---";
-            String logoutTime = (u.logoutTime != null && !u.logoutTime.isEmpty()) ? u.logoutTime : "---";
-            String lastLogin = (u.lastLoginDate != null && !u.lastLoginDate.isEmpty()) ? u.lastLoginDate : "---";
-            
-            model.addRow(new Object[]{
-                u.username, 
-                u.role, 
-                status, 
-                loginTime, 
-                logoutTime, 
-                lastLogin
-            });
-        }
-    }
-    
+
+    //casher panel method     
     static JPanel cashierPanel(){
         JPanel panel = new JPanel(new BorderLayout());
         panel.setBackground(new Color(240, 248, 255));
@@ -1708,17 +2195,43 @@ public class STEMStorePOS {
         // ==================== BUTTON ACTIONS ====================
         
         // LOGOUT BUTTON ACTION - Simple logout without questions
-         logoutBtn.addActionListener(e -> {
+        logoutBtn.addActionListener(e -> {
             // Record logout time for cashier
+            Date now = new Date();
+            String currentDateTime = new SimpleDateFormat("dd/MM/yyyy HH:mm:ss").format(now);
+            String currentTime = new SimpleDateFormat("HH:mm:ss").format(now);
+
             for(User u : users) {
                 if(u.username.equals(currentCashier)) {
                     u.isLoggedIn = false;
-                    if(u.logoutTime == null) u.logoutTime = "";
-                    u.logoutTime = new SimpleDateFormat("HH:mm:ss").format(new Date());
+                    u.logoutTime = currentTime;
                     saveUsers();
                     break;
                 }
             }
+
+            // Update the latest session for cashier
+            for(int i = sessionHistory.size() - 1; i >= 0; i--) {
+                Session s = sessionHistory.get(i);
+                if(s.username.equals(currentCashier) && s.logoutDateTime.isEmpty()) {
+                    s.logoutDateTime = currentDateTime;
+                    // Calculate duration
+                    try {
+                        SimpleDateFormat format = new SimpleDateFormat("dd/MM/yyyy HH:mm:ss");
+                        Date loginDate = format.parse(s.loginDateTime);
+                        Date logoutDate = format.parse(currentDateTime);
+                        long diffMillis = logoutDate.getTime() - loginDate.getTime();
+                        long hours = diffMillis / (60 * 60 * 1000);
+                        long minutes = (diffMillis % (60 * 60 * 1000)) / (60 * 1000);
+                        s.duration = String.format("%dh %dm", hours, minutes);
+                    } catch(Exception ex) {
+                        s.duration = "---";
+                    }
+                    break;
+                }
+            }
+            saveSessions();
+
             currentCashier = "";
             cartModel.setRowCount(0);
             total = 0;
@@ -2423,6 +2936,6 @@ static List<String> splitIntoLines(String text, int maxWidth) {
     }
     
     return lines;
-}
-   
+    }
+  
 }
